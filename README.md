@@ -121,12 +121,7 @@ Users can:
 
 ---
 
-## License
-
-This project is licensed under the MIT License. See the `LICENSE` file for details.
-
----
-
 ## Contributors
 
-- **[Your Name]** - Author and Developer
+- **[Arjun Verma]** - 230102125
+- **[Subhashree Sahoo]** - 230102122
