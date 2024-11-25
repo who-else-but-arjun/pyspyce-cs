@@ -66,33 +66,28 @@ class CircuitSimulator:
         for node in self.nodes:
             if node == min(self.nodes):  # Skip reference node
                 continue
-                
+
             current_sum = 0
-            
+
             for comp in self.components:
                 if comp['n1'] == node or comp['n2'] == node:
                     v1 = self.node_vars[comp['n1']]
                     v2 = self.node_vars[comp['n2']]
-                    
+
                     # Define current direction: positive if entering node
                     if comp['name'] == 'R':
                         i = (v1 - v2) / comp['value']
                     elif comp['name'] == 'C':
                         i = self.s * comp['value'] * (v1 - v2)
                     elif comp['name'] == 'L':
-                        i = self.current_vars[comp['id']]
+                        i = (v1 - v2) / (comp['value'] * self.s)
                     elif comp['name'] == 'V':
                         i = self.current_vars[comp['id']]
-                        # Handle AC voltage source in frequency domain
                         if comp.get('ac_params'):
                             ac = comp['ac_params']
                             omega = 2 * sp.pi * ac['frequency']
-                            if ac['type'] == 'sin':
-                                v_source = ac['magnitude'] * sp.sin(omega * self.t)
-                            else:  # cos
-                                v_source = ac['magnitude'] * sp.cos(omega * self.t)
-                            # Convert to s-domain
-                            v_source = sp.laplace_transform(v_source, self.t, self.s)[0]
+                            v_source = ac['magnitude'] / (self.s + omega * 1j) if ac['type'] == 'sin' else \
+                                       ac['magnitude'] / (self.s - omega * 1j)
                             self.equations.append(v1 - v2 - v_source)
                         else:
                             self.equations.append(v1 - v2 - comp['value'])
@@ -104,7 +99,7 @@ class CircuitSimulator:
                         current_sum += i
                     else:
                         current_sum -= i
-                        
+
             if current_sum != 0:
                 self.equations.append(current_sum)
 
@@ -129,24 +124,50 @@ class CircuitSimulator:
                 
             self.setup_node_variables()
             self.build_equations()
-            
+
             variables = list(self.node_vars.values()) + list(self.current_vars.values())
-            
+
             if not variables:
                 raise ValueError("No variables to solve for")
-                
+
             sympy_equations = [sp.Eq(eq, 0) for eq in self.equations]
             solution = sp.solve(sympy_equations, variables, dict=True)
-            
+
             if not solution:
                 raise ValueError("No solution found")
-                
+
             self.solutions = solution[0]
             return True
-            
         except Exception as e:
-            st.error(f"Error solving circuit: {str(e)}")
+            print(f"Error solving circuit: {str(e)}")
             return False
+
+    def get_frequency_response(self, fmin=1, fmax=1000, points=100):
+        """Calculate frequency response"""
+        f = np.logspace(np.log10(fmin), np.log10(fmax), points)
+        w = 2 * np.pi * f
+        responses = {}
+
+        for var, expr in self.solutions.items():
+            magnitude = []
+            phase = []
+            for w_val in w:
+                try:
+                    v_complex = complex(expr.subs(self.s, 1j * w_val))
+                    
+                    # Convert to native float values to make them serializable
+                    magnitude.append(float(abs(v_complex)))
+                    phase.append(float(np.angle(v_complex, deg=True)))
+                except Exception as e:
+                    magnitude.append(0.0)  # Default to zero if there's an error
+                    phase.append(0.0)
+
+            responses[str(var)] = {'magnitude': magnitude, 'phase': phase}
+
+        return f, responses
+
+
+    from sympy.utilities.lambdify import lambdify
 
     def get_time_domain_response(self, tmax=0.01, points=1000):
         t_vals = np.linspace(0, tmax, points)
@@ -164,17 +185,21 @@ class CircuitSimulator:
             try:
                 print(f"Processing variable: {var}, Expression: {expr}")
                 if isinstance(expr, (int, float)):
+                    # If the expression is a constant, create a constant response
                     responses[str(var)] = np.full(len(t_vals), float(expr))
                 else:
+                    # Simplify the symbolic expression
                     expr = sp.simplify(expr)
                     print(f"Simplified expr for {var}: {expr}")
 
                     if expr.is_constant():
+                        # Handle constant expressions
                         responses[str(var)] = np.full(len(t_vals), float(expr))
                     else:
+                        # Perform inverse Laplace transform
                         time_expr = inverse_laplace_transform(expr, self.s, t)
-                        values = np.zeros(len(t_vals))
 
+                        # Handle special case for DiracDelta
                         if 'DiracDelta' in str(time_expr):
                             print(f"Handling DiracDelta for {var}")
                             coeff = 1.0
@@ -185,6 +210,7 @@ class CircuitSimulator:
 
                             pulse_width = 5 * dt
                             sigma = dt
+                            values = np.zeros(len(t_vals))
                             for i, t_val in enumerate(t_vals):
                                 if t_val < pulse_width:
                                     values[i] = coeff * (1.0 / (sigma * np.sqrt(2 * np.pi))) * \
@@ -197,25 +223,22 @@ class CircuitSimulator:
                             if np.max(np.abs(values)) > MAX_AMPLITUDE:
                                 values *= MAX_AMPLITUDE / np.max(np.abs(values))
                         else:
-                            expr_str = str(time_expr).replace('exp', 'np.exp') \
-                                                    .replace('sin', 'np.sin') \
-                                                    .replace('cos', 'np.cos')
-                            for i, t_val in enumerate(t_vals):
-                                try:
-                                    values[i] = eval(expr_str.replace('t', str(t_val)))
-                                except Exception as e:
-                                    print(f"Eval error at t={t_val}: {e}")
-                                    values[i] = values[i-1] if i > 0 else 0
+                            # Lambdify for numerical evaluation
+                            try:
+                                time_func = lambdify(t, time_expr, modules=["numpy"])
+                                values = time_func(t_vals)
+                            except Exception as e:
+                                print(f"Error in lambdifying {var}: {e}")
+                                values = np.zeros(len(t_vals))
+                        values = np.real(values)
+                        # Limit amplitude if necessary
+                        if np.max(np.abs(values)) > MAX_AMPLITUDE:
+                            values *= MAX_AMPLITUDE / np.max(np.abs(values))
 
-                            if np.max(np.abs(values)) > MAX_AMPLITUDE:
-                                values *= MAX_AMPLITUDE / np.max(np.abs(values))
-
-                            for i in range(1, len(values)):
-                                if abs(values[i] - values[i-1]) > MAX_AMPLITUDE:
-                                    values[i] = values[i-1]
-
-                        if np.all(values == 0):
-                            print(f"Warning: Time-domain response for {var} is zero.")
+                        # Handle large discontinuities
+                        for i in range(1, len(values)):
+                            if abs(values[i] - values[i - 1]) > MAX_AMPLITUDE:
+                                values[i] = values[i - 1]
 
                         responses[str(var)] = values
             except Exception as e:
@@ -224,34 +247,7 @@ class CircuitSimulator:
 
         return t_vals, responses
 
-    def get_frequency_response(self, fmin=1, fmax=1000, points=100):
-        """Calculate frequency response"""
-        f = np.logspace(np.log10(fmin), np.log10(fmax), points)
-        w = 2 * np.pi * f
-        responses = {}
 
-        for var, expr in self.solutions.items():
-            try:
-                if isinstance(expr, (int, float)):
-                    magnitude = [float(expr)] * len(f)
-                    phase = [0] * len(f)
-                else:
-                    magnitude = []
-                    phase = []
-                    for w_val in w:
-                        try:
-                            v_complex = complex(expr.subs(self.s, 1j * w_val))
-                            magnitude.append(abs(v_complex))
-                            phase.append(np.angle(v_complex, deg=True))
-                        except:
-                            magnitude.append(0)
-                            phase.append(0)
-                responses[str(var)] = {'magnitude': magnitude, 'phase': phase}
-            except Exception as e:
-                st.warning(f"Could not compute frequency response for {var}: {str(e)}")
-                continue
-
-        return f, responses
     @staticmethod
     def create_circuit_visualization(components, nodes):
         """
