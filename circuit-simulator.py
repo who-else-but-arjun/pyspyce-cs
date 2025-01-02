@@ -15,7 +15,7 @@ from calculations import CircuitSimulator
 def main():
     st.set_page_config(page_title="Circuit Simulator", layout="wide")
     
-    st.title("Interactive Circuit Simulator")
+    st.title("PySpyce")
     
     if 'simulator' not in st.session_state:
         st.session_state.simulator = CircuitSimulator()
