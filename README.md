@@ -1,9 +1,9 @@
 
-# Circuit Simulator
+# PySpyce : Circuit Simulator
 
 ## Overview
 
-The Circuit Simulator is a Python-based tool designed to model and analyze electrical circuits interactively. 
+PySpyce is a Python-based circuit Simulator tool designed to model and analyze electrical (RLC) circuits interactively. 
 It supports both time-domain and frequency-domain analyses using numerical and symbolic computation.
 
 ### Key Features:
