@@ -1,0 +1,7 @@
+plotly 
+numpy
+sympy
+networkx
+pandas
+base64
+io
