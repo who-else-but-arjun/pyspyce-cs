@@ -4,6 +4,3 @@ numpy
 sympy
 networkx
 pandas
-layoutparser[effdet]>=0.2
-pycocotools==2.0.1
-git+https://github.com/facebookresearch/detectron2.git@v0.4#egg=detectron2
